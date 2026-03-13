@@ -34,7 +34,8 @@ from telegram.ext import (ApplicationBuilder, CommandHandler, ContextTypes,
 # ═══════════════════════════════════════════════════════════
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY",  "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-4-scout:free")
 
 BOT_NAME    = "Alex"
 MAX_HISTORY = 30
@@ -93,31 +94,38 @@ reminders: dict[str, dict] = {}
 #  GEMINI via direct HTTP (most reliable, no SDK issues)
 # ═══════════════════════════════════════════════════════════
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 def ask_gemini(history: list, user_text: str) -> str:
-    """Call Gemini REST API directly with retry on rate limit."""
+    """Call OpenRouter API with retry on rate limit."""
     import time
 
-    contents = []
+    # Convert history to OpenAI format
+    messages = [{"role": "system", "content": PERSONALITY}]
     for msg in history:
-        contents.append({
-            "role": msg["role"],
-            "parts": [{"text": p} if isinstance(p, str) else p for p in msg["parts"]]
-        })
-    contents.append({"role": "user", "parts": [{"text": user_text}]})
+        role = "assistant" if msg["role"] == "model" else msg["role"]
+        text = msg["parts"][0] if isinstance(msg["parts"][0], str) else msg["parts"][0].get("text", "")
+        messages.append({"role": role, "content": text})
+    messages.append({"role": "user", "content": user_text})
 
     payload = {
-        "system_instruction": {"parts": [{"text": PERSONALITY}]},
-        "contents": contents,
-        "generationConfig": {"maxOutputTokens": 1024}
+        "model": OPENROUTER_MODEL,
+        "messages": messages,
+        "max_tokens": 1024
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://telegram-bot.app",
+        "X-Title": "Alex Telegram Bot"
     }
 
     for attempt in range(3):
         try:
             resp = requests.post(
-                GEMINI_URL,
-                params={"key": GEMINI_API_KEY},
+                OPENROUTER_URL,
+                headers=headers,
                 json=payload,
                 timeout=30
             )
@@ -129,11 +137,11 @@ def ask_gemini(history: list, user_text: str) -> str:
                 continue
 
             if resp.status_code != 200:
-                log.error(f"Gemini API error {resp.status_code}: {resp.text}")
+                log.error(f"OpenRouter API error {resp.status_code}: {resp.text}")
                 return "Sorry, I had trouble getting a response. Please try again in a moment."
 
             data  = resp.json()
-            reply = data["candidates"][0]["content"]["parts"][0]["text"]
+            reply = data["choices"][0]["message"]["content"]
 
             history.append({"role": "user",  "parts": [user_text]})
             history.append({"role": "model", "parts": [reply]})
@@ -143,9 +151,9 @@ def ask_gemini(history: list, user_text: str) -> str:
             return reply
 
         except Exception as e:
-            log.error(f"Gemini request failed: {e}")
+            log.error(f"OpenRouter request failed: {e}")
             if attempt == 2:
-                return "Sorry, I couldn't reach Gemini. Please try again."
+                return "Sorry, I couldn't reach my AI backend. Please try again."
             time.sleep(3)
 
     return "I'm getting too many requests right now. Please wait a moment and try again."
@@ -291,11 +299,12 @@ def main():
     if not TELEGRAM_TOKEN:
         log.error("TELEGRAM_TOKEN is not set!")
         return
-    if not GEMINI_API_KEY:
-        log.error("GEMINI_API_KEY is not set!")
+    if not OPENROUTER_API_KEY:
+        log.error("OPENROUTER_API_KEY is not set!")
         return
 
-    log.info(f"GEMINI_API_KEY loaded: {GEMINI_API_KEY[:8]}...")
+    log.info(f"OPENROUTER_API_KEY loaded: {OPENROUTER_API_KEY[:8]}...")
+    log.info(f"Model: {OPENROUTER_MODEL}")
     log.info(f"TELEGRAM_TOKEN loaded: {TELEGRAM_TOKEN[:8]}...")
 
     app          = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
