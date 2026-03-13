@@ -93,12 +93,12 @@ reminders: dict[str, dict] = {}
 #  GEMINI via direct HTTP (most reliable, no SDK issues)
 # ═══════════════════════════════════════════════════════════
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 
 def ask_gemini(history: list, user_text: str) -> str:
-    """Call Gemini REST API directly."""
+    """Call Gemini REST API directly with retry on rate limit."""
+    import time
 
-    # Build contents array from history + new message
     contents = []
     for msg in history:
         contents.append({
@@ -113,34 +113,42 @@ def ask_gemini(history: list, user_text: str) -> str:
         "generationConfig": {"maxOutputTokens": 1024}
     }
 
-    try:
-        resp = requests.post(
-            GEMINI_URL,
-            params={"key": GEMINI_API_KEY},
-            json=payload,
-            timeout=30
-        )
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                GEMINI_URL,
+                params={"key": GEMINI_API_KEY},
+                json=payload,
+                timeout=30
+            )
 
-        if resp.status_code != 200:
-            log.error(f"Gemini API error {resp.status_code}: {resp.text}")
-            return f"API error {resp.status_code} — please check your GEMINI_API_KEY in Railway Variables."
+            if resp.status_code == 429:
+                wait = 5 * (attempt + 1)
+                log.warning(f"Rate limited (429), retrying in {wait}s...")
+                time.sleep(wait)
+                continue
 
-        data  = resp.json()
-        reply = data["candidates"][0]["content"]["parts"][0]["text"]
+            if resp.status_code != 200:
+                log.error(f"Gemini API error {resp.status_code}: {resp.text}")
+                return "Sorry, I had trouble getting a response. Please try again in a moment."
 
-        # Save to history
-        history.append({"role": "user",  "parts": [user_text]})
-        history.append({"role": "model", "parts": [reply]})
+            data  = resp.json()
+            reply = data["candidates"][0]["content"]["parts"][0]["text"]
 
-        # Trim history
-        while len(history) > MAX_HISTORY:
-            history.pop(0)
+            history.append({"role": "user",  "parts": [user_text]})
+            history.append({"role": "model", "parts": [reply]})
+            while len(history) > MAX_HISTORY:
+                history.pop(0)
 
-        return reply
+            return reply
 
-    except Exception as e:
-        log.error(f"Gemini request failed: {e}")
-        return "Sorry, I couldn't reach Gemini. Please try again."
+        except Exception as e:
+            log.error(f"Gemini request failed: {e}")
+            if attempt == 2:
+                return "Sorry, I couldn't reach Gemini. Please try again."
+            time.sleep(3)
+
+    return "I'm getting too many requests right now. Please wait a moment and try again."
 
 
 # ═══════════════════════════════════════════════════════════
