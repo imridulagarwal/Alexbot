@@ -104,7 +104,10 @@ def ask_gemini(history: list, user_text: str) -> str:
     messages = [{"role": "system", "content": PERSONALITY}]
     for msg in history:
         role = "assistant" if msg["role"] == "model" else msg["role"]
-        text = msg["parts"][0] if isinstance(msg["parts"][0], str) else msg["parts"][0].get("text", "")
+        part = msg["parts"][0] if msg["parts"] else ""
+        text = part if isinstance(part, str) else (part.get("text", "") if part else "")
+        if not text:
+            continue
         messages.append({"role": role, "content": text})
     messages.append({"role": "user", "content": user_text})
 
